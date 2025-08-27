@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import {
     Zap,
     Play,
@@ -7,25 +7,47 @@ import {
     RotateCcw,
     Unlock,
     AlertCircle,
-    CheckCircle
+    ArrowLeft,
+    Info,
+    Power
 } from 'lucide-react';
 import { chargingStationAPI } from '../services/api';
+import StatusBadge from '../components/StatusBadge';
+
+const ActionButton = ({ onClick, disabled, loading, icon: Icon, text, loadingText, className }) => (
+    <button
+        onClick={onClick}
+        disabled={disabled || loading}
+        className={`inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 transition-colors duration-150 ${className}`}
+    >
+        <Icon className={`-ml-1 mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+        {loading ? loadingText : text}
+    </button>
+);
+
+const InfoRow = ({ label, value }) => (
+    <div className="flex justify-between py-3 border-b border-gray-200">
+        <dt className="text-sm font-medium text-gray-500">{label}</dt>
+        <dd className="text-sm text-gray-900 font-semibold">{value || 'N/A'}</dd>
+    </div>
+);
 
 const ChargingStationDetail = () => {
-    const { chargePointId } = useParams();
+    const { id } = useParams();
     const [station, setStation] = useState(null);
     const [connectors, setConnectors] = useState([]);
     const [transactions, setTransactions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState({});
+    const [idTag, setIdTag] = useState('04B34299A33480'); // Default for demo
 
     useEffect(() => {
         const fetchStationDetails = async () => {
             try {
                 const [stationRes, connectorsRes, transactionsRes] = await Promise.all([
-                    chargingStationAPI.getById(chargePointId),
-                    chargingStationAPI.getConnectors(chargePointId),
-                    chargingStationAPI.getTransactions(chargePointId)
+                    chargingStationAPI.getById(id),
+                    chargingStationAPI.getConnectors(id),
+                    chargingStationAPI.getTransactions(id)
                 ]);
 
                 setStation(stationRes.data);
@@ -39,80 +61,54 @@ const ChargingStationDetail = () => {
         };
 
         fetchStationDetails();
-        const interval = setInterval(fetchStationDetails, 10000); // Refresh every 10s
+        const interval = setInterval(fetchStationDetails, 5000); // Refresh every 5s
         return () => clearInterval(interval);
-    }, [chargePointId]);
+    }, [id]);
 
-    const handleRemoteStart = async (connectorId) => {
-        const idTag = prompt('Enter ID Tag:');
-        if (!idTag) return;
-
-        setActionLoading(prev => ({ ...prev, [`start-${connectorId}`]: true }));
+    const handleAction = async (action, params, loadingKey) => {
+        setActionLoading(prev => ({ ...prev, [loadingKey]: true }));
         try {
-            await chargingStationAPI.remoteStart(chargePointId, idTag, connectorId);
-            alert('Remote start command sent successfully');
+            await action(...params);
         } catch (error) {
-            alert('Error sending remote start command');
+            console.error(`Error performing action ${loadingKey}:`, error);
+            alert(`Error: ${error.response?.data?.message || 'An unexpected error occurred.'}`);
         } finally {
-            setActionLoading(prev => ({ ...prev, [`start-${connectorId}`]: false }));
+            setActionLoading(prev => ({ ...prev, [loadingKey]: false }));
         }
     };
 
-    const handleRemoteStop = async (transactionId) => {
-        setActionLoading(prev => ({ ...prev, [`stop-${transactionId}`]: true }));
-        try {
-            await chargingStationAPI.remoteStop(chargePointId, transactionId);
-            alert('Remote stop command sent successfully');
-        } catch (error) {
-            alert('Error sending remote stop command');
-        } finally {
-            setActionLoading(prev => ({ ...prev, [`stop-${transactionId}`]: false }));
+    const handleRemoteStart = (connectorId) => {
+        // In a real app, you'd use a modal to get the idTag
+        if (!idTag) {
+            alert('Please enter an ID Tag.');
+            return;
+        }
+        handleAction(chargingStationAPI.remoteStart, [id, idTag, connectorId], `start-${connectorId}`);
+    };
+
+    const handleRemoteStop = (transactionId) => {
+        console.log('Stopping transaction with ID:', transactionId);
+        if (!transactionId) {
+            console.error('No transaction ID provided to stop');
+            alert('Error: No transaction ID provided');
+            return;
+        }
+        handleAction(chargingStationAPI.remoteStop, [id, transactionId], `stop-${transactionId}`);
+    };
+
+    const handleReset = () => {
+        if (window.confirm('Are you sure you want to reset this charging station? This may interrupt charging sessions.')) {
+            handleAction(chargingStationAPI.reset, [id], 'reset');
         }
     };
 
-    const handleReset = async () => {
-        if (!confirm('Are you sure you want to reset this charging station?')) return;
-
-        setActionLoading(prev => ({ ...prev, reset: true }));
-        try {
-            await chargingStationAPI.reset(chargePointId);
-            alert('Reset command sent successfully');
-        } catch (error) {
-            alert('Error sending reset command');
-        } finally {
-            setActionLoading(prev => ({ ...prev, reset: false }));
-        }
-    };
-
-    const handleUnlockConnector = async (connectorId) => {
-        setActionLoading(prev => ({ ...prev, [`unlock-${connectorId}`]: true }));
-        try {
-            await chargingStationAPI.unlockConnector(chargePointId, connectorId);
-            alert('Unlock connector command sent successfully');
-        } catch (error) {
-            alert('Error sending unlock connector command');
-        } finally {
-            setActionLoading(prev => ({ ...prev, [`unlock-${connectorId}`]: false }));
-        }
-    };
-
-    const getConnectorStatusColor = (status) => {
-        switch (status) {
-            case 'Available': return 'text-success-600 bg-success-100';
-            case 'Charging': return 'text-primary-600 bg-primary-100';
-            case 'Preparing': return 'text-warning-600 bg-warning-100';
-            case 'SuspendedEV': return 'text-warning-600 bg-warning-100';
-            case 'SuspendedEVSE': return 'text-warning-600 bg-warning-100';
-            case 'Finishing': return 'text-warning-600 bg-warning-100';
-            case 'Faulted': return 'text-danger-600 bg-danger-100';
-            case 'Unavailable': return 'text-gray-600 bg-gray-100';
-            default: return 'text-gray-600 bg-gray-100';
-        }
+    const handleUnlockConnector = (connectorId) => {
+        handleAction(chargingStationAPI.unlockConnector, [id, connectorId], `unlock-${connectorId}`);
     };
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-64">
+            <div className="flex items-center justify-center h-full">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
             </div>
         );
@@ -120,159 +116,129 @@ const ChargingStationDetail = () => {
 
     if (!station) {
         return (
-            <div className="px-4 sm:px-6 lg:px-8">
-                <div className="text-center py-12">
-                    <AlertCircle className="mx-auto h-12 w-12 text-gray-400" />
-                    <h3 className="mt-2 text-sm font-medium text-gray-900">Charging station not found</h3>
-                </div>
+            <div className="text-center py-16">
+                <AlertCircle className="mx-auto h-12 w-12 text-gray-400" />
+                <h3 className="mt-2 text-lg font-medium text-gray-900">Charging Station Not Found</h3>
+                <p className="mt-1 text-sm text-gray-500">The requested station could not be found.</p>
+                <Link to="/charging-stations" className="mt-6 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700">
+                    Go Back to Stations
+                </Link>
             </div>
         );
     }
 
     return (
-        <div className="px-4 sm:px-6 lg:px-8">
+        <div>
             {/* Header */}
             <div className="mb-8">
+                <Link to="/charging-stations" className="flex items-center text-sm font-medium text-gray-500 hover:text-gray-700 mb-3">
+                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    Back to Stations
+                </Link>
                 <div className="flex items-center justify-between">
                     <div>
-                        <h1 className="text-2xl font-bold leading-7 text-gray-900">
+                        <h1 className="text-3xl font-bold leading-tight text-gray-900">
                             {station.chargePointId}
                         </h1>
-                        <p className="mt-1 text-sm text-gray-500">
-                            {station.chargePointVendor} {station.chargePointModel}
+                        <p className="mt-1 text-md text-gray-600">
+                            {station.chargePointVendor} • {station.chargePointModel}
                         </p>
                     </div>
-                    <div className="flex space-x-3">
-                        <button
-                            onClick={handleReset}
-                            disabled={actionLoading.reset}
-                            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
-                        >
-                            <RotateCcw className="h-4 w-4 mr-2" />
-                            {actionLoading.reset ? 'Resetting...' : 'Reset'}
-                        </button>
-                    </div>
+                    <ActionButton
+                        onClick={handleReset}
+                        disabled={actionLoading.reset}
+                        loading={actionLoading.reset}
+                        icon={RotateCcw}
+                        text="Reset Station"
+                        loadingText="Resetting..."
+                        className="bg-danger-600 hover:bg-danger-700 focus:ring-danger-500"
+                    />
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
-                {/* Station Info */}
-                <div className="bg-white shadow rounded-lg p-6">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Station Information</h3>
-                    <dl className="space-y-3">
-                        <div>
-                            <dt className="text-sm font-medium text-gray-500">Status</dt>
-                            <dd className="text-sm text-gray-900 flex items-center mt-1">
-                                {station.isRegistered ? (
-                                    <>
-                                        <CheckCircle className="h-4 w-4 text-success-500 mr-2" />
-                                        Registered
-                                    </>
-                                ) : (
-                                    <>
-                                        <AlertCircle className="h-4 w-4 text-warning-500 mr-2" />
-                                        Pending
-                                    </>
-                                )}
-                            </dd>
-                        </div>
-                        <div>
-                            <dt className="text-sm font-medium text-gray-500">Firmware Version</dt>
-                            <dd className="text-sm text-gray-900 mt-1">{station.firmwareVersion || 'N/A'}</dd>
-                        </div>
-                        <div>
-                            <dt className="text-sm font-medium text-gray-500">Serial Number</dt>
-                            <dd className="text-sm text-gray-900 mt-1">{station.chargePointSerialNumber || 'N/A'}</dd>
-                        </div>
-                        <div>
-                            <dt className="text-sm font-medium text-gray-500">Last Heartbeat</dt>
-                            <dd className="text-sm text-gray-900 mt-1">
-                                {station.lastHeartbeat
-                                    ? new Date(station.lastHeartbeat).toLocaleString()
-                                    : 'Never'
-                                }
-                            </dd>
-                        </div>
-                    </dl>
-                </div>
-
-                {/* Connectors */}
-                <div className="bg-white shadow rounded-lg p-6">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Connectors</h3>
-                    <div className="space-y-4">
-                        {connectors.map((connector) => (
-                            <div key={connector.id} className="border rounded-lg p-4">
-                                <div className="flex items-center justify-between mb-3">
-                                    <div className="flex items-center">
-                    <span className="text-sm font-medium text-gray-900">
-                      Connector {connector.connectorId}
-                    </span>
-                                        <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getConnectorStatusColor(connector.status)}`}>
-                      {connector.status}
-                    </span>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+                {/* Connectors (Main Column) */}
+                <div className="lg:col-span-2 space-y-6">
+                    {connectors.map((connector) => {
+                        const activeTransaction = transactions.find(t => t.connectorId === connector.connectorId && t.status === 'Active');
+                        return (
+                            <div key={connector.id} className="bg-white shadow-sm rounded-xl border border-gray-200 overflow-hidden">
+                                <div className="p-5 border-b border-gray-200">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-lg font-bold text-gray-900">Connector #{connector.connectorId}</h3>
+                                        <StatusBadge status={connector.status} />
                                     </div>
                                 </div>
 
-                                <div className="flex space-x-2">
-                                    {connector.status === 'Available' && (
-                                        <button
-                                            onClick={() => handleRemoteStart(connector.connectorId)}
-                                            disabled={actionLoading[`start-${connector.connectorId}`]}
-                                            className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-white bg-success-600 hover:bg-success-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-success-500 disabled:opacity-50"
-                                        >
-                                            <Play className="h-3 w-3 mr-1" />
-                                            Start
-                                        </button>
+                                <div className="p-5">
+                                    {activeTransaction ? (
+                                        <div className="bg-blue-50 p-4 rounded-lg">
+                                            <h4 className="font-semibold text-blue-800 mb-3">Active Session</h4>
+                                            <InfoRow label="Transaction ID" value={activeTransaction.transactionId} />
+                                            <InfoRow label="ID Tag" value={activeTransaction.idTag} />
+                                            <InfoRow label="Started" value={new Date(activeTransaction.startTimestamp).toLocaleString()} />
+                                            <InfoRow label="Energy Consumed" value={`${activeTransaction.startMeterValue || 0} Wh`} />
+                                            <div className="mt-4">
+                                                <ActionButton
+                                                    onClick={() => handleRemoteStop(activeTransaction.transactionId)}
+                                                    disabled={actionLoading[`stop-${activeTransaction.transactionId}`]}
+                                                    loading={actionLoading[`stop-${activeTransaction.transactionId}`]}
+                                                    icon={Square}
+                                                    text="Stop Session"
+                                                    loadingText="Stopping..."
+                                                    className="w-full bg-danger-600 hover:bg-danger-700 focus:ring-danger-500"
+                                                />
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="text-center py-8">
+                                            <p className="text-gray-500">No active session on this connector.</p>
+                                        </div>
                                     )}
+                                </div>
 
-                                    <button
+                                <div className="bg-gray-50 p-4 border-t border-gray-200 flex items-center justify-end space-x-3">
+                                    <ActionButton
                                         onClick={() => handleUnlockConnector(connector.connectorId)}
                                         disabled={actionLoading[`unlock-${connector.connectorId}`]}
-                                        className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
-                                    >
-                                        <Unlock className="h-3 w-3 mr-1" />
-                                        Unlock
-                                    </button>
+                                        loading={actionLoading[`unlock-${connector.connectorId}`]}
+                                        icon={Unlock}
+                                        text="Unlock"
+                                        loadingText="Unlocking..."
+                                        className="bg-gray-600 hover:bg-gray-700 focus:ring-gray-500"
+                                    />
+                                    <ActionButton
+                                        onClick={() => handleRemoteStart(connector.connectorId)}
+                                        disabled={connector.status !== 'Available' || actionLoading[`start-${connector.connectorId}`]}
+                                        loading={actionLoading[`start-${connector.connectorId}`]}
+                                        icon={Play}
+                                        text="Start Session"
+                                        loadingText="Starting..."
+                                        className="bg-success-600 hover:bg-success-700 focus:ring-success-500"
+                                    />
                                 </div>
                             </div>
-                        ))}
-                    </div>
+                        );
+                    })}
                 </div>
 
-                {/* Active Transactions */}
-                <div className="bg-white shadow rounded-lg p-6">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Active Transactions</h3>
-                    <div className="space-y-4">
-                        {transactions.filter(t => t.status === 'Active').length === 0 ? (
-                            <p className="text-sm text-gray-500">No active transactions</p>
-                        ) : (
-                            transactions.filter(t => t.status === 'Active').map((transaction) => (
-                                <div key={transaction.id} className="border rounded-lg p-4">
-                                    <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-gray-900">
-                      Transaction #{transaction.transactionId}
-                    </span>
-                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
-                      Active
-                    </span>
-                                    </div>
-                                    <div className="text-xs text-gray-500 space-y-1">
-                                        <div>ID Tag: {transaction.idTag}</div>
-                                        <div>Connector: {transaction.connectorId}</div>
-                                        <div>Started: {new Date(transaction.startTimestamp).toLocaleString()}</div>
-                                        <div>Energy: {transaction.startMeterValue || 0} Wh</div>
-                                    </div>
-                                    <button
-                                        onClick={() => handleRemoteStop(transaction.transactionId)}
-                                        disabled={actionLoading[`stop-${transaction.transactionId}`]}
-                                        className="mt-3 w-full inline-flex justify-center items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-white bg-danger-600 hover:bg-danger-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-danger-500 disabled:opacity-50"
-                                    >
-                                        <Square className="h-3 w-3 mr-1" />
-                                        {actionLoading[`stop-${transaction.transactionId}`] ? 'Stopping...' : 'Stop'}
-                                    </button>
-                                </div>
-                            ))
-                        )}
+                {/* Station Info (Sidebar) */}
+                <div className="lg:col-span-1 space-y-6">
+                    <div className="bg-white shadow-sm rounded-xl border border-gray-200">
+                        <div className="p-5 border-b border-gray-200">
+                            <h3 className="text-lg font-bold text-gray-900 flex items-center">
+                                <Info className="h-5 w-5 mr-2 text-primary-600" />
+                                Station Information
+                            </h3>
+                        </div>
+                        <div className="p-5">
+                            <dl>
+                                <InfoRow label="Status" value={station.isRegistered ? 'Registered' : 'Pending'} />
+                                <InfoRow label="Firmware Version" value={station.firmwareVersion} />
+                                <InfoRow label="Serial Number" value={station.chargePointSerialNumber} />
+                                <InfoRow label="Last Heartbeat" value={station.lastHeartbeat ? new Date(station.lastHeartbeat).toLocaleString() : 'Never'} />
+                            </dl>
+                        </div>
                     </div>
                 </div>
             </div>

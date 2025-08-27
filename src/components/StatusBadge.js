@@ -1,59 +1,37 @@
 import React from 'react';
+import { CheckCircle, XCircle, AlertTriangle, Clock, Zap, PauseCircle, Power, Ban } from 'lucide-react';
 
-const StatusBadge = ({ status, type = 'default' }) => {
-    const getStatusColor = () => {
-        if (type === 'connector') {
-            switch (status) {
-                case 'Available': return 'bg-success-100 text-success-800';
-                case 'Charging': return 'bg-primary-100 text-primary-800';
-                case 'Preparing': return 'bg-warning-100 text-warning-800';
-                case 'SuspendedEV': case 'SuspendedEVSE': return 'bg-warning-100 text-warning-800';
-                case 'Finishing': return 'bg-warning-100 text-warning-800';
-                case 'Faulted': return 'bg-danger-100 text-danger-800';
-                case 'Unavailable': return 'bg-gray-100 text-gray-800';
-                default: return 'bg-gray-100 text-gray-800';
-            }
-        }
+const statusConfig = {
+    // Connector Statuses
+    Available: { text: 'Available', icon: CheckCircle, className: 'bg-success-100 text-success-700' },
+    Charging: { text: 'Charging', icon: Zap, className: 'bg-blue-100 text-blue-700' },
+    Preparing: { text: 'Preparing', icon: Clock, className: 'bg-yellow-100 text-yellow-700' },
+    SuspendedEV: { text: 'Suspended EV', icon: PauseCircle, className: 'bg-yellow-100 text-yellow-700' },
+    SuspendedEVSE: { text: 'Suspended EVSE', icon: PauseCircle, className: 'bg-yellow-100 text-yellow-700' },
+    Finishing: { text: 'Finishing', icon: Power, className: 'bg-blue-100 text-blue-700' },
+    Faulted: { text: 'Faulted', icon: AlertTriangle, className: 'bg-danger-100 text-danger-700' },
+    Unavailable: { text: 'Unavailable', icon: Ban, className: 'bg-gray-100 text-gray-700' },
 
-        if (type === 'transaction') {
-            switch (status) {
-                case 'Active': return 'bg-success-100 text-success-800';
-                case 'Completed': return 'bg-gray-100 text-gray-800';
-                default: return 'bg-gray-100 text-gray-800';
-            }
-        }
+    // Station Statuses
+    Online: { text: 'Online', icon: CheckCircle, className: 'bg-success-100 text-success-700' },
+    Offline: { text: 'Offline', icon: XCircle, className: 'bg-gray-100 text-gray-700' },
+    Pending: { text: 'Pending', icon: Clock, className: 'bg-yellow-100 text-yellow-700' },
 
-        // Default status colors
-        switch (status) {
-            case 'Accepted': case 'Online': case 'Available':
-                return 'bg-success-100 text-success-800';
-            case 'Blocked': case 'Offline': case 'Faulted':
-                return 'bg-danger-100 text-danger-800';
-            case 'Pending': case 'Preparing':
-                return 'bg-warning-100 text-warning-800';
-            default:
-                return 'bg-gray-100 text-gray-800';
-        }
-    };
+    // Transaction Statuses
+    Active: { text: 'Active', icon: Zap, className: 'bg-success-100 text-success-700' },
+    Completed: { text: 'Completed', icon: CheckCircle, className: 'bg-gray-100 text-gray-700' },
+};
+
+const StatusBadge = ({ status }) => {
+    const config = statusConfig[status] || { text: status, icon: Ban, className: 'bg-gray-100 text-gray-800' };
+    const Icon = config.icon;
 
     return (
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor()}`}>
-      {status}
-    </span>
+        <span className={`inline-flex items-center gap-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${config.className}`}>
+            <Icon className="-ml-0.5 h-3.5 w-3.5" />
+            {config.text}
+        </span>
     );
 };
 
 export default StatusBadge;
-
-// src/index.js
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import './index.css';
-import App from './App';
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-    <React.StrictMode>
-        <App />
-    </React.StrictMode>
-);

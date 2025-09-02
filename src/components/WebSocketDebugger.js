@@ -6,7 +6,7 @@ const WebSocketDebugger = ({ chargePointId = 'CP001' }) => {
     const [isConnected, setIsConnected] = useState(false);
     const [messages, setMessages] = useState([]);
     const [rawMessage, setRawMessage] = useState('');
-    const [wsUrl] = useState(`ws://localhost:8080/ocpp/${chargePointId}`);
+    const [wsUrl, setWsUrl] = useState(`ws://localhost:8080/ocpp/${chargePointId}`);
 
     const addMessage = (message, type, direction) => {
         setMessages(prev => [{
@@ -25,6 +25,20 @@ const WebSocketDebugger = ({ chargePointId = 'CP001' }) => {
             }
         };
     }, [ws]);
+
+    useEffect(() => {
+        // Update WebSocket URL when chargePointId changes
+        const newUrl = `ws://localhost:8080/ocpp/${chargePointId}`;
+        setWsUrl(newUrl);
+        
+        // If connected, disconnect and reconnect to new URL
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+            setWs(null);
+            setIsConnected(false);
+            addMessage(`URL changed to ${newUrl} - please reconnect`, 'system', 'system');
+        }
+    }, [chargePointId]);
 
     const connect = () => {
         if (ws) {

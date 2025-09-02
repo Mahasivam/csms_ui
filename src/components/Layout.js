@@ -7,7 +7,8 @@ import {
     Receipt,
     Menu,
     X,
-    Leaf
+    Leaf,
+    MessageCircle
 } from 'lucide-react';
 
 const Layout = ({ children }) => {
@@ -19,6 +20,7 @@ const Layout = ({ children }) => {
         { name: 'Charging Stations', href: '/charging-stations', icon: Zap },
         { name: 'Transactions', href: '/transactions', icon: Receipt },
         { name: 'ID Tags', href: '/id-tags', icon: CreditCard },
+        { name: 'OCPP Test', href: '/ocpp-test', icon: MessageCircle },
     ];
 
     const isActive = (path) => location.pathname === path;

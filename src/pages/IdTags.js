@@ -42,7 +42,7 @@ const IdTags = () => {
     };
 
     const handleDeleteIdTag = async (idTag) => {
-        if (!confirm(`Are you sure you want to delete ID tag ${idTag}?`)) return;
+        if (!window.confirm(`Are you sure you want to delete ID tag ${idTag}?`)) return;
 
         try {
             await idTagAPI.delete(idTag);

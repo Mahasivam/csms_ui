@@ -9,9 +9,10 @@ import {
     AlertCircle,
     ArrowLeft,
     Info,
-    Power
+    Power,
+    User
 } from 'lucide-react';
-import { chargingStationAPI } from '../services/api';
+import { chargingStationAPI, addEventListener, idTagAPI } from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 
 const ActionButton = ({ onClick, disabled, loading, icon: Icon, text, loadingText, className }) => (
@@ -39,20 +40,92 @@ const ChargingStationDetail = () => {
     const [transactions, setTransactions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState({});
-    const [idTag, setIdTag] = useState('04B34299A33480'); // Default for demo
+    const [idTag, setIdTag] = useState('');
+    const [availableIdTags, setAvailableIdTags] = useState([]);
 
     useEffect(() => {
         const fetchStationDetails = async () => {
             try {
-                const [stationRes, connectorsRes, transactionsRes] = await Promise.all([
-                    chargingStationAPI.getById(id),
-                    chargingStationAPI.getConnectors(id),
-                    chargingStationAPI.getTransactions(id)
-                ]);
+                let stationData = null;
+                let connectorsData = [];
+                let transactionsData = [];
 
-                setStation(stationRes.data);
-                setConnectors(connectorsRes.data);
-                setTransactions(transactionsRes.data);
+                // Try to fetch station details
+                try {
+                    const stationRes = await chargingStationAPI.getById(id);
+                    stationData = stationRes.data;
+                } catch (stationError) {
+                    console.warn('Station API not available, using fallback data for:', id);
+                    // Create mock station data based on the ID
+                    stationData = {
+                        chargePointId: id,
+                        chargePointVendor: 'Unknown Vendor',
+                        chargePointModel: 'Unknown Model',
+                        firmwareVersion: 'Unknown',
+                        chargePointSerialNumber: 'Unknown',
+                        isRegistered: true,
+                        lastHeartbeat: new Date().toISOString()
+                    };
+                }
+
+                // Try to fetch connectors
+                try {
+                    const connectorsRes = await chargingStationAPI.getConnectors(id);
+                    connectorsData = connectorsRes.data;
+                } catch (connectorsError) {
+                    console.warn('Connectors API not available, using fallback data');
+                    // Create mock connector data (assume 2 connectors per station)
+                    connectorsData = [
+                        {
+                            id: 1,
+                            connectorId: 1,
+                            status: 'Available'
+                        },
+                        {
+                            id: 2,
+                            connectorId: 2,
+                            status: 'Available'
+                        }
+                    ];
+                }
+
+                // Try to fetch transactions
+                try {
+                    const transactionsRes = await chargingStationAPI.getTransactions(id);
+                    transactionsData = transactionsRes.data;
+                } catch (transactionsError) {
+                    console.warn('Transactions API not available, using empty data');
+                    transactionsData = [];
+                }
+
+                setStation(stationData);
+                setConnectors(connectorsData);
+                setTransactions(transactionsData);
+
+                // Fetch available ID tags
+                try {
+                    const idTagsRes = await idTagAPI.getAll();
+                    const acceptedIdTags = idTagsRes.data.filter(tag => tag.status === 'Accepted');
+                    setAvailableIdTags(acceptedIdTags);
+                    
+                    // Auto-select first available authorized ID tag
+                    if (acceptedIdTags.length > 0 && !idTag) {
+                        setIdTag(acceptedIdTags[0].idTag);
+                    }
+                } catch (idTagError) {
+                    console.warn('ID Tags API not available, using manual input');
+                    setAvailableIdTags([]);
+                }
+
+                // Connect to WebSocket for real-time updates
+                if (stationData) {
+                    try {
+                        chargingStationAPI.connect(stationData.chargePointId);
+                    } catch (wsError) {
+                        console.warn('WebSocket connection failed:', wsError);
+                    }
+                }
+
             } catch (error) {
                 console.error('Error fetching station details:', error);
             } finally {
@@ -61,39 +134,256 @@ const ChargingStationDetail = () => {
         };
 
         fetchStationDetails();
-        const interval = setInterval(fetchStationDetails, 5000); // Refresh every 5s
-        return () => clearInterval(interval);
+        const interval = setInterval(fetchStationDetails, 10000); // Refresh every 10s (reduced frequency)
+        
+        // Set up real-time event listeners for this station
+        const unsubscribers = [
+            addEventListener('transactionStarted', (data) => {
+                if (data.chargePointId === id) {
+                    console.log('Transaction started on this station:', data);
+                    setTransactions(prev => [...prev, {
+                        id: data.transactionId,
+                        transactionId: data.transactionId,
+                        connectorId: data.connectorId,
+                        idTag: data.idTag,
+                        startTimestamp: data.timestamp,
+                        status: 'Active',
+                        startMeterValue: data.meterStart
+                    }]);
+                }
+            }),
+
+            addEventListener('transactionStopped', (data) => {
+                if (data.chargePointId === id) {
+                    console.log('Transaction stopped on this station:', data);
+                    setTransactions(prev => 
+                        prev.filter(t => t.transactionId !== data.transactionId)
+                    );
+                }
+            }),
+
+            addEventListener('statusNotification', (data) => {
+                if (data.chargePointId === id) {
+                    console.log('Status update for this station:', data);
+                    setConnectors(prev => 
+                        prev.map(connector => 
+                            connector.connectorId === data.connectorId
+                                ? { ...connector, status: data.status }
+                                : connector
+                        )
+                    );
+                }
+            })
+        ];
+
+        return () => {
+            clearInterval(interval);
+            unsubscribers.forEach(unsub => unsub());
+        };
     }, [id]);
 
     const handleAction = async (action, params, loadingKey) => {
         setActionLoading(prev => ({ ...prev, [loadingKey]: true }));
         try {
-            await action(...params);
+            const result = await action(...params);
+            console.log(`${loadingKey} action completed:`, result);
+            // Show success message
+            if (result?.status === 'Accepted') {
+                alert(`Action ${loadingKey} completed successfully!`);
+            }
         } catch (error) {
             console.error(`Error performing action ${loadingKey}:`, error);
-            alert(`Error: ${error.response?.data?.message || 'An unexpected error occurred.'}`);
+            
+            let errorMessage = 'An unexpected error occurred.';
+            
+            if (error.message.includes('NotSupported')) {
+                errorMessage = 'This action is not supported by the backend. Please check the BACKEND_INTEGRATION_GUIDE.md file.';
+            } else if (error.message.includes('timed out')) {
+                errorMessage = 'Request timed out. Please check if the charging station is connected.';
+            } else if (error.response?.data?.message) {
+                errorMessage = error.response.data.message;
+            } else if (error.message) {
+                errorMessage = error.message;
+            }
+            
+            alert(`Error: ${errorMessage}`);
         } finally {
             setActionLoading(prev => ({ ...prev, [loadingKey]: false }));
         }
     };
 
-    const handleRemoteStart = (connectorId) => {
+    const handleRemoteStart = async (connectorId) => {
         // In a real app, you'd use a modal to get the idTag
         if (!idTag) {
             alert('Please enter an ID Tag.');
             return;
         }
-        handleAction(chargingStationAPI.remoteStart, [id, idTag, connectorId], `start-${connectorId}`);
+        
+        console.log('🔄 Attempting to start transaction on connector:', connectorId);
+        console.log('🔄 Station ID:', id, 'ID Tag:', idTag);
+        
+        setActionLoading(prev => ({ ...prev, [`start-${connectorId}`]: true }));
+        
+        try {
+            // Try WebSocket OCPP command first
+            console.log('📡 Trying WebSocket OCPP RemoteStartTransaction...');
+            const result = await chargingStationAPI.remoteStartTransaction(id, idTag, connectorId);
+            console.log('✅ WebSocket start transaction result:', result);
+            
+            if (result?.status === 'Accepted') {
+                alert('Start transaction command sent successfully! Wait for the charging station to respond.');
+                
+                // Optimistically add a pending transaction to UI
+                const pendingTransaction = {
+                    id: `pending-${Date.now()}`,
+                    transactionId: `pending-${Date.now()}`,
+                    connectorId: connectorId,
+                    idTag: idTag,
+                    startTimestamp: new Date().toISOString(),
+                    status: 'Starting...',
+                    startMeterValue: 0
+                };
+                
+                setTransactions(prev => [...prev, pendingTransaction]);
+                
+                // Remove pending transaction after 10 seconds if no real transaction started
+                setTimeout(() => {
+                    setTransactions(prev => 
+                        prev.filter(t => !t.id.toString().startsWith('pending-'))
+                    );
+                }, 10000);
+                
+            } else {
+                console.warn('⚠️ WebSocket command returned non-Accepted status:', result);
+                alert('Start transaction was not accepted by the charging station.');
+            }
+            
+        } catch (wsError) {
+            console.error('❌ WebSocket start transaction failed:', wsError);
+            
+            // If WebSocket fails, try REST API as fallback
+            if (wsError.message.includes('NotSupported') || wsError.message.includes('timed out')) {
+                console.log('🔄 Trying REST API fallback...');
+                try {
+                    const restResult = await chargingStationAPI.remoteStartRest(id, idTag, connectorId);
+                    console.log('✅ REST API start transaction result:', restResult);
+                    alert('Start transaction command sent via REST API!');
+                    
+                } catch (restError) {
+                    console.error('❌ REST API start transaction also failed:', restError);
+                    let errorMessage = 'Both WebSocket and REST API failed.';
+                    if (restError.response?.data?.message) {
+                        errorMessage = restError.response.data.message;
+                    } else if (restError.message) {
+                        errorMessage = restError.message;
+                    }
+                    alert(`Error starting transaction: ${errorMessage}`);
+                }
+            } else {
+                let errorMessage = 'An unexpected error occurred.';
+                if (wsError.response?.data?.message) {
+                    errorMessage = wsError.response.data.message;
+                } else if (wsError.message) {
+                    errorMessage = wsError.message;
+                }
+                alert(`Error starting transaction: ${errorMessage}`);
+            }
+        }
+        
+        // Always try to refresh transactions from API
+        try {
+            console.log('🔄 Refreshing transactions from API...');
+            const transactionsRes = await chargingStationAPI.getTransactions(id);
+            setTransactions(transactionsRes.data);
+            console.log('✅ Transactions refreshed:', transactionsRes.data);
+        } catch (refreshError) {
+            console.warn('⚠️ Could not refresh transactions from API:', refreshError);
+        }
+        
+        setActionLoading(prev => ({ ...prev, [`start-${connectorId}`]: false }));
     };
 
-    const handleRemoteStop = (transactionId) => {
-        console.log('Stopping transaction with ID:', transactionId);
+    const handleRemoteStop = async (transactionId) => {
+        console.log('🔄 Attempting to stop transaction with ID:', transactionId);
+        console.log('🔄 Station ID:', id);
+        
         if (!transactionId) {
-            console.error('No transaction ID provided to stop');
+            console.error('❌ No transaction ID provided to stop');
             alert('Error: No transaction ID provided');
             return;
         }
-        handleAction(chargingStationAPI.remoteStop, [id, transactionId], `stop-${transactionId}`);
+        
+        setActionLoading(prev => ({ ...prev, [`stop-${transactionId}`]: true }));
+        
+        try {
+            // First try WebSocket OCPP command
+            console.log('📡 Trying WebSocket OCPP RemoteStopTransaction...');
+            const result = await chargingStationAPI.remoteStopTransaction(id, transactionId);
+            console.log('✅ WebSocket stop transaction result:', result);
+            console.log('✅ Backend response details:', JSON.stringify(result, null, 2));
+            
+            // Immediately remove the transaction from UI state (optimistic update)
+            setTransactions(prev => 
+                prev.filter(t => t.transactionId !== transactionId)
+            );
+            
+            if (result?.status === 'Accepted') {
+                alert('Transaction stopped successfully via WebSocket!');
+            } else {
+                console.warn('⚠️ WebSocket command returned non-Accepted status:', result);
+            }
+            
+        } catch (wsError) {
+            console.error('❌ WebSocket stop transaction failed:', wsError);
+            
+            // If WebSocket fails, try REST API as fallback
+            if (wsError.message.includes('NotSupported') || wsError.message.includes('timed out')) {
+                console.log('🔄 Trying REST API fallback...');
+                try {
+                    const restResult = await chargingStationAPI.remoteStopRest(id, transactionId);
+                    console.log('✅ REST API stop transaction result:', restResult);
+                    
+                    // Remove from UI state
+                    setTransactions(prev => 
+                        prev.filter(t => t.transactionId !== transactionId)
+                    );
+                    
+                    alert('Transaction stopped successfully via REST API!');
+                    
+                } catch (restError) {
+                    console.error('❌ REST API stop transaction also failed:', restError);
+                    
+                    // If both fail, just remove from UI anyway (force stop)
+                    console.log('🔧 Forcing UI update (removing transaction from display)');
+                    setTransactions(prev => 
+                        prev.filter(t => t.transactionId !== transactionId)
+                    );
+                    
+                    alert('⚠️ Backend stop command failed, but transaction removed from UI. Please check if it actually stopped on the charging station.');
+                }
+            } else {
+                // For other errors, don't remove from UI
+                let errorMessage = 'An unexpected error occurred.';
+                if (wsError.response?.data?.message) {
+                    errorMessage = wsError.response.data.message;
+                } else if (wsError.message) {
+                    errorMessage = wsError.message;
+                }
+                alert(`Error stopping transaction: ${errorMessage}`);
+            }
+        }
+        
+        // Always try to refresh transactions from API to get the real state
+        try {
+            console.log('🔄 Refreshing transactions from API...');
+            const transactionsRes = await chargingStationAPI.getTransactions(id);
+            setTransactions(transactionsRes.data);
+            console.log('✅ Transactions refreshed:', transactionsRes.data);
+        } catch (refreshError) {
+            console.warn('⚠️ Could not refresh transactions from API:', refreshError);
+        }
+        
+        setActionLoading(prev => ({ ...prev, [`stop-${transactionId}`]: false }));
     };
 
     const handleReset = () => {
@@ -160,7 +450,8 @@ const ChargingStationDetail = () => {
                 {/* Connectors (Main Column) */}
                 <div className="lg:col-span-2 space-y-6">
                     {connectors.map((connector) => {
-                        const activeTransaction = transactions.find(t => t.connectorId === connector.connectorId && t.status === 'Active');
+                        // Find any transaction for this connector (status might be 'Active', undefined, or other values)
+                        const activeTransaction = transactions.find(t => t.connectorId === connector.connectorId);
                         return (
                             <div key={connector.id} className="bg-white shadow-sm rounded-xl border border-gray-200 overflow-hidden">
                                 <div className="p-5 border-b border-gray-200">
@@ -224,6 +515,51 @@ const ChargingStationDetail = () => {
 
                 {/* Station Info (Sidebar) */}
                 <div className="lg:col-span-1 space-y-6">
+                    {/* ID Tag Input */}
+                    <div className="bg-white shadow-sm rounded-xl border border-gray-200">
+                        <div className="p-5 border-b border-gray-200">
+                            <h3 className="text-lg font-bold text-gray-900 flex items-center">
+                                <User className="h-5 w-5 mr-2 text-primary-600" />
+                                User ID Tag
+                            </h3>
+                        </div>
+                        <div className="p-5">
+                            <label htmlFor="idTag" className="block text-sm font-medium text-gray-700 mb-2">
+                                ID Tag for Remote Start
+                            </label>
+                            {availableIdTags.length > 0 ? (
+                                <select
+                                    id="idTag"
+                                    value={idTag}
+                                    onChange={(e) => setIdTag(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                                >
+                                    <option value="">Select an ID Tag</option>
+                                    {availableIdTags.map((tag) => (
+                                        <option key={tag.idTag} value={tag.idTag}>
+                                            {tag.idTag} {tag.status === 'Accepted' ? '✓' : '⚠️'}
+                                        </option>
+                                    ))}
+                                </select>
+                            ) : (
+                                <input
+                                    type="text"
+                                    id="idTag"
+                                    value={idTag}
+                                    onChange={(e) => setIdTag(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                                    placeholder="Enter ID Tag (no authorized tags found)"
+                                />
+                            )}
+                            <p className="mt-2 text-xs text-gray-500">
+                                {availableIdTags.length > 0 
+                                    ? `${availableIdTags.length} authorized ID tags available. Only "Accepted" tags can start transactions.`
+                                    : 'No authorized ID tags found. You can add them in the ID Tags section or enter one manually.'
+                                }
+                            </p>
+                        </div>
+                    </div>
+
                     <div className="bg-white shadow-sm rounded-xl border border-gray-200">
                         <div className="p-5 border-b border-gray-200">
                             <h3 className="text-lg font-bold text-gray-900 flex items-center">

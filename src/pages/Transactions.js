@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Receipt, Clock, Zap, User } from 'lucide-react';
-import { transactionAPI } from '../services/api';
+import { Receipt, Clock, Zap, User, Activity } from 'lucide-react';
+import { transactionAPI, meterValuesAPI, addEventListener } from '../services/api';
 
 const Transactions = () => {
     const [transactions, setTransactions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('all');
+    const [meterValues, setMeterValues] = useState({});
 
     useEffect(() => {
         const fetchTransactions = async () => {
@@ -14,6 +15,21 @@ const Transactions = () => {
                     ? await transactionAPI.getActive()
                     : await transactionAPI.getAll();
                 setTransactions(response.data);
+                
+                // Fetch meter values for active transactions
+                for (const transaction of response.data) {
+                    if (transaction.status === 'Active') {
+                        try {
+                            const meterResponse = await meterValuesAPI.getByTransaction(transaction.transactionId);
+                            setMeterValues(prev => ({
+                                ...prev,
+                                [transaction.transactionId]: meterResponse.data
+                            }));
+                        } catch (error) {
+                            console.warn('Error fetching meter values for transaction', transaction.transactionId);
+                        }
+                    }
+                }
             } catch (error) {
                 console.error('Error fetching transactions:', error);
             } finally {
@@ -23,7 +39,26 @@ const Transactions = () => {
 
         fetchTransactions();
         const interval = setInterval(fetchTransactions, 15000);
-        return () => clearInterval(interval);
+
+        // Listen for real-time meter values
+        const unsubscribeMeterValues = addEventListener('meterValues', (data) => {
+            if (data.transactionId) {
+                setMeterValues(prev => ({
+                    ...prev,
+                    [data.transactionId]: [...(prev[data.transactionId] || []), {
+                        timestamp: new Date().toISOString(),
+                        measurand: 'Energy.Active.Import.Register',
+                        value: data.meterValue,
+                        unit: 'Wh'
+                    }]
+                }));
+            }
+        });
+
+        return () => {
+            clearInterval(interval);
+            unsubscribeMeterValues();
+        };
     }, [filter]);
 
     const calculateDuration = (start, end) => {
@@ -39,6 +74,34 @@ const Transactions = () => {
     const calculateEnergy = (start, end) => {
         if (!end) return 'In progress';
         return `${(end - start) / 1000} kWh`;
+    };
+
+    const getLatestMeterValue = (transactionId) => {
+        const values = meterValues[transactionId];
+        if (!values || values.length === 0) return null;
+        return values[values.length - 1];
+    };
+
+    const getCurrentPower = (transactionId) => {
+        const values = meterValues[transactionId];
+        if (!values || values.length < 2) return 'N/A';
+        
+        const latest = values[values.length - 1];
+        const previous = values[values.length - 2];
+        
+        if (latest && previous && latest.measurand === 'Power.Active.Import') {
+            return `${(parseFloat(latest.value) / 1000).toFixed(1)} kW`;
+        }
+        return 'N/A';
+    };
+
+    const getTotalConsumed = (transaction, transactionId) => {
+        const latestMeter = getLatestMeterValue(transactionId);
+        if (latestMeter && latestMeter.measurand === 'Energy.Active.Import.Register') {
+            const consumed = (parseFloat(latestMeter.value) - transaction.startMeterValue) / 1000;
+            return `${consumed.toFixed(2)} kWh`;
+        }
+        return calculateEnergy(transaction.startMeterValue, transaction.endMeterValue);
     };
 
     if (loading) {
@@ -116,16 +179,28 @@ const Transactions = () => {
                                                     <Clock className="h-4 w-4 mr-1" />
                                                     {calculateDuration(transaction.startTimestamp, transaction.endTimestamp)}
                                                 </div>
+                                                {transaction.status === 'Active' && getCurrentPower(transaction.transactionId) !== 'N/A' && (
+                                                    <div className="flex items-center">
+                                                        <Activity className="h-4 w-4 mr-1" />
+                                                        {getCurrentPower(transaction.transactionId)}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
                                     <div className="text-right">
                                         <p className="text-sm font-medium text-gray-900">
-                                            {calculateEnergy(transaction.startMeterValue, transaction.endMeterValue)}
+                                            {getTotalConsumed(transaction, transaction.transactionId)}
                                         </p>
-                                        <p className="text-sm text-gray-500">
-                                            {new Date(transaction.startTimestamp).toLocaleString()}
-                                        </p>
+                                        {transaction.status === 'Active' ? (
+                                            <p className="text-sm text-success-600 font-medium">
+                                                Charging • {new Date(transaction.startTimestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}
+                                            </p>
+                                        ) : (
+                                            <p className="text-sm text-gray-500">
+                                                {new Date(transaction.startTimestamp).toLocaleString()}
+                                            </p>
+                                        )}
                                     </div>
                                 </div>
                             </li>
